@@ -1,0 +1,124 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String   // Hashed password
+  name      String
+  role      String   @default("USER")
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Employee {
+  id         String   @id @default(uuid())
+  name       String
+  email      String   @unique
+  avatar     String?
+  role       String
+  manager    String
+  department String
+  office     String
+  status     String   // e.g. "ACTIVE", "ON BOARDING", "PROBATION", "ON LEAVE"
+  account    String   // e.g. "Activated", "Need Invitation"
+  companyId  String?
+  company    Company? @relation(fields: [companyId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String
+  parentDept  String
+  description String
+  leader      String
+  companyId   String?
+  company     Company? @relation(fields: [companyId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([name, companyId])
+}
+
+model Office {
+  id           String   @id @default(uuid())
+  name         String
+  location     String
+  description  String   @default("")
+  isHQ         Boolean  @default(false)
+  active       Boolean  @default(true)
+  timezone     String   @default("GMT +00:00")
+  phone        String   @default("")
+  email        String   @default("")
+  headOfOffice String   @default("Management")
+  companyId    String?
+  company      Company? @relation(fields: [companyId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([name, companyId])
+}
+
+model JobTitle {
+  id        String   @id @default(uuid())
+  title     String
+  active    Boolean  @default(true)
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([title, companyId])
+}
+
+model WorkSchedule {
+  id            String              @id @default(uuid())
+  title         String
+  isDefault     Boolean             @default(false)
+  active        Boolean             @default(true)
+  standardHours String              @default("8h 00m")
+  effectiveFrom String
+  type          String              @default("Duration-based")
+  totalHours    String              @default("40h 00m")
+  companyId     String?
+  company       Company?            @relation(fields: [companyId], references: [id])
+  dailyHours    WorkScheduleDay[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+}
+
+model WorkScheduleDay {
+  id               String        @id @default(uuid())
+  day              String
+  hours            String
+  active           Boolean       @default(true)
+  workScheduleId   String
+  workSchedule     WorkSchedule  @relation(fields: [workScheduleId], references: [id], onDelete: Cascade)
+}
+
+model Company {
+  id             String         @id @default(uuid())
+  name           String         @unique
+  website        String?
+  phone          String?
+  email          String?
+  overview       String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  users          User[]
+  employees      Employee[]
+  departments    Department[]
+  offices        Office[]
+  jobTitles      JobTitle[]
+  workSchedules  WorkSchedule[]
+}
