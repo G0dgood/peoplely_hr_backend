@@ -21,6 +21,9 @@ model User {
   conversations Participant[]
   timeOffRequests TimeOffRequest[]
   timeOffBalances TimeOffBalance[]
+  attendanceRecords AttendanceRecord[]
+  payrollRecords    PayrollRecord[]
+  notifications     Notification[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -135,6 +138,17 @@ model Company {
   timeOffPolicies    TimeOffPolicy[]
   timeOffRequests    TimeOffRequest[]
   holidays           Holiday[]
+  attendanceRecords  AttendanceRecord[]
+  attendanceSetting  AttendanceSetting?
+  payrollRecords     PayrollRecord[]
+  payrollSetting     PayrollSetting?
+  jobs               Job[]
+  candidates         Candidate[]
+  recruitmentStages  RecruitmentStage[]
+  recruitmentTags    RecruitmentTag[]
+  recruitmentResources RecruitmentResource[]
+  recruitmentEmailTemplates RecruitmentEmailTemplate[]
+  performanceEvaluations    PerformanceEvaluation[]
 }
 
 model Role {
@@ -312,6 +326,221 @@ model Holiday {
   date        DateTime
   companyId   String?
   company     Company? @relation(fields: [companyId], references: [id])
+  updatedAt   DateTime @updatedAt
+}
+
+model AttendanceRecord {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  date         String   // e.g. "01 Mar 2023"
+  clockIn      String   // e.g. "08:00 (GMT+7)"
+  clockInLoc   String
+  clockOut     String?  // nullable if currently clocked in
+  clockOutLoc  String?
+  schedule     String   @default("8h")
+  logged       String   @default("0h 00m 00s")
+  paid         String   @default("8h")
+  overtime     String   @default("0m")
+  status       String   @default("PENDING") // "PENDING", "APPROVED"
+  isPositive   Boolean  @default(true)
+  notes        String?
+  device       String   @default("Web Browser")
+  ipAddress    String?
+  companyId    String?
+  company      Company? @relation(fields: [companyId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model AttendanceSetting {
+  id                     String   @id @default(uuid())
+  companyId              String   @unique
+  company                Company  @relation(fields: [companyId], references: [id])
+  totalHoursCalculation  String   @default("Every Valid Check-in & Check-out")
+  startDate              String   @default("11 Feb 2023")
+  approvalCycleValue     String   @default("1")
+  approvalCyclePeriod    String   @default("Monthly")
+  repeatOn               String   @default("Monthly on Day 11")
+  location               String   @default("All Offices")
+  officeName             String   @default("Unpixel Office")
+  officeChannels         String   @default("Desktop, Mobile")
+  officeQrCode           String   @default("Yes")
+  officeGeofencing       String   @default("Active")
+  officeAddress          String   @default("100 Queen St W, Toronto, ON M5H 2N3, Kanada")
+  officeRadius           String   @default("1 kilometers")
+  officePolicy           String   @default("Not allow clock in/out outside the office")
+  qrAutoGenerateValue    String   @default("5")
+  qrAutoGeneratePeriod   String   @default("Second")
+  qrSecurityType         String   @default("Public URL for Everyone")
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
+model PayrollRecord {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  baseSalary      Float    @default(0)
+  bonus           Float    @default(0)
+  deductions      Float    @default(0)
+  netPay          Float    @default(0)
+  period          String   // e.g. "Apr 2023"
+  status          String   @default("PENDING") // "PAID", "PENDING", "PROCESSING", "FAILED"
+  employmentType  String   @default("Full-time")
+  geofencing      String   @default("-")
+  title           String   @default("Employee")
+  jobDate         String   @default("-")
+  lastWorkingDate String   @default("-")
+  bankName        String   @default("-")
+  accountName     String   @default("-")
+  branch          String   @default("-")
+  accountNumber   String   @default("-")
+  swiftBic        String   @default("-")
+  iban            String   @default("-")
+  companyId       String?
+  company         Company? @relation(fields: [companyId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model PayrollSetting {
+  id                        String   @id @default(uuid())
+  companyId                 String   @unique
+  company                   Company  @relation(fields: [companyId], references: [id])
+  currency                  String   @default("USD")
+  monthlySalaryBasisMethod  String   @default("Fixed Day")
+  monthlySalaryBasisDays    String   @default("20 Workout Days")
+  payCycleName              String   @default("Standard Cycle")
+  payCycleDescription       String   @default("Default monthly pay cycle")
+  payCycleRepeatValue       String   @default("1")
+  payCycleRepeatPeriod      String   @default("Monthly")
+  payCycleCutOffDate        String   @default("25th of Month")
+  payCyclePersonInCharge    String   @default("Select Employee")
+  payCycleReviewDays        String   @default("5 Days")
+  payCycleCriteria          String   @default("All Active Employee")
+  compensationOvertimeRate  String   @default("1.5x Regular Rate")
+  compensationTaxMethod     String   @default("Gross Income")
+  compensationBpjsEmployee  String   @default("Employee: 1%")
+  compensationBpjsEmployer  String   @default("Employer: 4%")
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+}
+
+model Job {
+  id                String            @id @default(uuid())
+  title             String
+  department        String
+  office            String
+  status            String            @default("ACTIVE") // "ACTIVE", "CLOSED", "UNACTIVE"
+  employmentType    String            @default("Fulltime")
+  quantity          Int               @default(1)
+  closingDate       String            @default("N/A")
+  description       String            @db.Text
+  invitedMembers    Json              @default("[]") // [{ name, email, avatar }]
+  workflowStages    Json              @default("[]") // [{ name, isLocked }]
+  companyId         String
+  company           Company           @relation(fields: [companyId], references: [id])
+  candidates        Candidate[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+}
+
+model Candidate {
+  id             String    @id @default(uuid())
+  name           String
+  email          String
+  avatar         String    @default("")
+  phone          String    @default("")
+  jobId          String?
+  job            Job?      @relation(fields: [jobId], references: [id])
+  jobTitle       String    @default("") // Keep fallback if no jobId
+  cv             String?   @default("-")
+  stage          String    @default("Applied") // Matches stage name
+  overallRating  String?   @default("yes")
+  evaluationText String?   @db.Text
+  comments       Json      @default("[]") // [{ author, time, text }]
+  activity       Json      @default("[]") // [{ author, action, time, details }]
+  companyId      String
+  company        Company   @relation(fields: [companyId], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model RecruitmentStage {
+  id        String   @id @default(uuid())
+  name      String
+  isLocked  Boolean  @default(false)
+  position  Int      @default(0)
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RecruitmentTag {
+  id        String   @id @default(uuid())
+  name      String
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RecruitmentResource {
+  id        String   @id @default(uuid())
+  name      String
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RecruitmentEmailTemplate {
+  id           String   @id @default(uuid())
+  name         String
+  subject      String
+  body         String   @db.Text
+  stage        String
+  isLocked     Boolean  @default(false)
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String
+  icon        String   @default("bell") // "bell", "cog", "users", "calendar", "briefcase", "currency"
+  iconBg      String   @default("bg-rose-50")
+  iconColor   String   @default("text-rose-400")
+  unread      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
+
+model PerformanceEvaluation {
+  id              String   @id @default(uuid())
+  employeeId      String
+  employeeName    String
+  employeeEmail   String
+  reviewerName    String
+  reviewPeriod    String
+  workQuality     Int      @default(5)
+  communication   Int      @default(5)
+  teamwork        Int      @default(5)
+  punctuality     Int      @default(5)
+  strengths       String   @db.Text
+  growth          String   @db.Text
+  status          String   @default("SUBMITTED") // "SUBMITTED", "APPROVED"
+  companyId       String?
+  company         Company? @relation(fields: [companyId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+

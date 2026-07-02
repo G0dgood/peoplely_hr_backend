@@ -31,6 +31,11 @@ io.on("connection", (socket) => {
     console.log(`User ${socket.id} joined conversation ${conversationId}`);
   });
 
+  socket.on("join_user", (userId) => {
+    socket.join(`user_${userId}`);
+    console.log(`User ${socket.id} joined room user_${userId}`);
+  });
+
   socket.on("send_message", (data) => {
     // data should contain conversationId, senderId, text, etc.
     console.log("Message received:", data);
@@ -47,6 +52,34 @@ io.on("connection", (socket) => {
     console.log("User disconnected:", socket.id);
   });
 });
+
+export async function createAndSendNotification(
+  userId: string,
+  title: string,
+  description: string,
+  icon: string = "bell",
+  iconBg: string = "bg-rose-50 dark:bg-rose-500/10",
+  iconColor: string = "text-rose-400"
+) {
+  try {
+    const notification = await db.notification.create({
+      data: {
+        userId,
+        title,
+        description,
+        icon,
+        iconBg,
+        iconColor,
+        unread: true,
+      },
+    });
+    console.log("Created notification in DB:", notification);
+    io.to(`user_${userId}`).emit("new_notification", notification);
+    return notification;
+  } catch (error) {
+    console.error("Error creating/sending notification:", error);
+  }
+}
 
 // Auth Routes
 app.post("/api/auth/login", async (req, res) => {
@@ -1500,6 +1533,21 @@ app.post("/api/checklist-tasks", async (req, res) => {
       },
     });
 
+    // Try to find the matching user to notify
+    const matchedUser = await db.user.findFirst({
+      where: { name: { equals: employeeName, mode: "insensitive" } }
+    });
+    if (matchedUser) {
+      await createAndSendNotification(
+        matchedUser.id,
+        "New Task Assigned",
+        `You have been assigned: "${taskName}" (Due: ${dueDate})`,
+        "bell",
+        "bg-rose-50 dark:bg-rose-500/10",
+        "text-rose-400"
+      );
+    }
+
     return res.status(201).json({ checklistTask: newTask });
   } catch (error) {
     console.error("POST checklist task error:", error);
@@ -1547,6 +1595,22 @@ app.put("/api/checklist-tasks/:id", async (req, res) => {
       where: { id },
       data: updateData,
     });
+
+    if (completed === true && !task.completed) {
+      const matchedUser = await db.user.findFirst({
+        where: { name: { equals: updatedTask.employeeName, mode: "insensitive" } }
+      });
+      if (matchedUser) {
+        await createAndSendNotification(
+          matchedUser.id,
+          "Task Completed",
+          `Your task "${updatedTask.taskName}" was marked completed`,
+          "cog",
+          "bg-blue-50 dark:bg-blue-500/10",
+          "text-blue-400"
+        );
+      }
+    }
 
     return res.json({ checklistTask: updatedTask });
   } catch (error) {
@@ -1741,59 +1805,6 @@ app.get("/api/news", async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
 
-    // Seed default news if empty
-    if (newsItems.length === 0) {
-      await db.news.createMany({
-        data: [
-          {
-            title: "Promotion Announcement",
-            content: `Ladies and Gentlemen:\n\nIt is with great pleasure that I am announcing the promotion of Hugh Gough as one of the new Marketing Directors of InfoTech.\n\nHugh has been with InfoTech for close to ten years, painstakingly climbing the ranks with his dedication and commitment to his work. Three out of those ten years were spent as a marketing manager, where he has shown exemplary performance, as shown in the annual sales and customer retention reports.\n\nHugh has always shown initiative in the performance of his duties, even going above and beyond what is expected of him, in order to ensure that InfoTech delivers quality customer service while producing the expected outputs, well before their respective deadlines.\n\nLet us all congratulate Hugh on this promotion, and wish him luck for all his future undertakings.\n\nRegards`,
-            shareWith: "everyone",
-            status: "PUBLISHED",
-            authorName: "Jakob Geidt",
-            authorAvatar:
-              "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=120",
-            companyId,
-          },
-          {
-            title: "Security Policy Update",
-            content: `Dear Team,\n\nWe are writing to inform you of important updates to our company's Security Policy, effective immediately.\n\nAll employees are required to:\n1. Use strong, unique passwords for all company accounts\n2. Enable two-factor authentication on all work-related platforms\n3. Report any suspicious activity to the IT department immediately\n4. Not share login credentials with colleagues under any circumstances\n\nCompliance with these policies is mandatory and will be reviewed during annual performance evaluations.\n\nThank you for your cooperation.\n\nIT Security Team`,
-            shareWith: "everyone",
-            status: "PUBLISHED",
-            authorName: "Brandon Curtis",
-            authorAvatar:
-              "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=120",
-            companyId,
-          },
-          {
-            title: "Use of Company Property Policy",
-            content: `To All Staff,\n\nPlease be reminded that all company property – including laptops, mobile devices, vehicles, and office equipment – is to be used strictly for business purposes.\n\nPersonal use of company equipment is permitted only in minimal, incidental cases. Any damage resulting from misuse may result in disciplinary action.\n\nPlease return all borrowed equipment to the IT department upon request or upon leaving the company.\n\nHR Department`,
-            shareWith: "everyone",
-            status: "PUBLISHED",
-            authorName: "Madelyn Saris",
-            authorAvatar:
-              "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=120",
-            companyId,
-          },
-          {
-            title: "Company Vehicle Policy",
-            content: `Dear Team,\n\nThis is a draft of the updated Company Vehicle Policy currently under review by the HR and Legal teams.\n\nKey highlights:\n- Only authorized drivers with valid licenses may operate company vehicles\n- Vehicles must be returned with a full fuel tank\n- Any accidents or traffic violations must be reported immediately\n- Personal use of company vehicles is prohibited without prior written approval\n\nThis policy will be finalized and published next quarter.\n\nHR Team`,
-            shareWith: "everyone",
-            status: "DRAFT",
-            authorName: "Marilyn Saris",
-            authorAvatar:
-              "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&q=80&w=120",
-            companyId,
-          },
-        ],
-      });
-
-      newsItems = await db.news.findMany({
-        where: { companyId },
-        orderBy: { createdAt: "desc" },
-      });
-    }
-
     // Apply filters
     if (status) {
       newsItems = newsItems.filter(
@@ -1940,107 +1951,6 @@ app.get("/api/checklist-templates", async (req, res) => {
       include: { tasks: true },
     });
 
-    if (templates.length === 0) {
-      // Seed default onboarding templates
-      await db.checklistTemplate.create({
-        data: {
-          name: "Onboarding v.1",
-          description: "Files about the importance of essential tasks",
-          type: "onboarding",
-          companyId,
-          tasks: {
-            create: [
-              {
-                name: "Prepare company welcome kit",
-                tag: "CHECKLIST",
-                assignee: "Line Manager",
-                dueDate: "1 day before join date",
-                description:
-                  "Please ensure that your new team member have a prepared workstation with:\n1. Laptop\n2. Work email\n3. Internet/Team sites access",
-              },
-              {
-                name: "Prepare Workstation",
-                tag: "CHECKLIST",
-                assignee: "IT Support",
-                dueDate: "3 days before join date",
-                description:
-                  "Setup physical desk space, monitor, keyboard, mouse, and ensure cabling is completed.",
-              },
-              {
-                name: "Submit Document - Soft copy of ID card",
-                tag: "UPLOAD",
-                assignee: "Employee",
-                dueDate: "On join date",
-                description:
-                  "Employee must upload a clear scanned copy of their national ID card or passport.",
-              },
-            ],
-          },
-        },
-      });
-
-      await db.checklistTemplate.create({
-        data: {
-          name: "Probation",
-          description: "Files about the importance of essential tasks",
-          type: "onboarding",
-          companyId,
-          tasks: {
-            create: [
-              {
-                name: "Learn team members faces before joining",
-                tag: "UPLOAD",
-                assignee: "Employee",
-                dueDate: "7 days before join date",
-                description:
-                  "Check the employee directory and familiarize yourself with the immediate project team members.",
-              },
-              {
-                name: "Provide your Home Address",
-                tag: "EMPLOYEE INFORMATION",
-                assignee: "Employee",
-                dueDate: "On join date",
-                description:
-                  "Enter full residential address details for tax reporting and employee records.",
-              },
-              {
-                name: "Collect Documents - Hard Copies",
-                tag: "UPLOAD",
-                assignee: "HR Administrator",
-                dueDate: "3 days after join date",
-                description:
-                  "Verify physical original documents against uploaded scanned items and file them in the folder.",
-              },
-            ],
-          },
-        },
-      });
-
-      // Seed default offboarding templates
-      await db.checklistTemplate.create({
-        data: {
-          name: "Standard Offboarding",
-          description: "Tasks for employee departure and offboarding processes",
-          type: "offboarding",
-          companyId,
-        },
-      });
-
-      await db.checklistTemplate.create({
-        data: {
-          name: "Contract Expiration",
-          description: "Standard checklist for contract non-renewals",
-          type: "offboarding",
-          companyId,
-        },
-      });
-
-      // Re-fetch
-      templates = await db.checklistTemplate.findMany({
-        where: { companyId },
-        include: { tasks: true },
-      });
-    }
 
     // Filter by type if provided
     if (type) {
@@ -2298,6 +2208,35 @@ app.post("/api/time-off/requests", async (req, res) => {
       include: { policy: true },
     });
 
+    // Notify user of submission
+    await createAndSendNotification(
+      userId,
+      "Time Off Request",
+      `Your request for ${newRequest.policy?.name || 'Leave'} starting ${startDate} has been submitted`,
+      "calendar",
+      "bg-teal-50 dark:bg-teal-500/10",
+      "text-[#0FAF7A]"
+    );
+
+    // Notify managers
+    if (companyId) {
+      const managers = await db.user.findMany({
+        where: { companyId, role: { in: ["ADMIN", "MANAGER"] } }
+      });
+      for (const manager of managers) {
+        if (manager.id !== userId) {
+          await createAndSendNotification(
+            manager.id,
+            "New Leave Request",
+            `A new leave request was submitted`,
+            "calendar",
+            "bg-teal-50 dark:bg-teal-500/10",
+            "text-[#0FAF7A]"
+          );
+        }
+      }
+    }
+
     return res.status(201).json({ timeOffRequest: newRequest });
   } catch (error) {
     console.error("POST time-off request error:", error);
@@ -2345,6 +2284,17 @@ app.put("/api/time-off/requests/:id", async (req, res) => {
       });
     }
 
+    if (status !== undefined) {
+      await createAndSendNotification(
+        request.userId,
+        "Time Off Status Updated",
+        `Your time off request for ${request.policy?.name || 'Leave'} starting ${request.startDate.toLocaleDateString("en-GB")} was ${status.toLowerCase()}`,
+        "calendar",
+        "bg-teal-50 dark:bg-teal-500/10",
+        "text-[#0FAF7A]"
+      );
+    }
+
     return res.json({ timeOffRequest: updatedRequest });
   } catch (error) {
     console.error("PUT time-off request error:", error);
@@ -2355,14 +2305,26 @@ app.put("/api/time-off/requests/:id", async (req, res) => {
 // GET /api/time-off/balances
 app.get("/api/time-off/balances", async (req, res) => {
   try {
-    const { userId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ error: "User ID is required" });
+    const { userId, companyId } = req.query;
+    if (!userId && !companyId) {
+      return res.status(400).json({ error: "userId or companyId is required" });
+    }
+
+    const where: any = {};
+    if (userId) {
+      where.userId = userId as string;
+    } else if (companyId) {
+      where.user = { companyId: companyId as string };
     }
 
     const balances = await db.timeOffBalance.findMany({
-      where: { userId: userId as string },
-      include: { policy: true },
+      where,
+      include: {
+        policy: true,
+        user: {
+          select: { id: true, name: true, email: true },
+        },
+      },
     });
 
     return res.json({ timeOffBalances: balances });
@@ -2547,7 +2509,1670 @@ app.delete("/api/time-off/requests/:id", async (req, res) => {
   }
 });
 
+// ==========================================
+// Attendance Routes
+// ==========================================
+
+// GET /api/attendance
+app.get("/api/attendance", async (req, res) => {
+  try {
+    const userId = (req.query.userId as string) || "";
+    const companyId = (req.query.companyId as string) || "";
+    const search = (req.query.search as string) || "";
+    const status = (req.query.status as string) || "";
+    const recordType = (req.query.recordType as string) || "";
+    const location = (req.query.location as string) || "";
+    const dateRange = (req.query.dateRange as string) || "";
+
+    const where: any = {};
+
+    if (userId) {
+      where.userId = userId;
+    }
+    if (companyId) {
+      where.companyId = companyId;
+    }
+
+    if (status && status !== "All Status") {
+      if (status === "PENDING" || status === "APPROVED") {
+        where.status = status;
+      } else if (status === "On Time" || status === "Late") {
+        where.isPositive = true;
+      } else if (status === "Deficit") {
+        where.isPositive = false;
+      }
+    }
+
+    if (recordType && recordType !== "All Record") {
+      if (recordType === "Overtime Shifts") {
+        where.NOT = { overtime: "0m" };
+      } else if (recordType === "Regular Shifts") {
+        where.overtime = "0m";
+      }
+    }
+
+    if (location && location !== "All Location") {
+      where.OR = [
+        { clockInLoc: { contains: location, mode: "insensitive" } },
+        { clockOutLoc: { contains: location, mode: "insensitive" } },
+      ];
+    }
+
+    if (search) {
+      where.user = {
+        name: { contains: search, mode: "insensitive" }
+      };
+    }
+
+    const records = await db.attendanceRecord.findMany({
+      where,
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          }
+        }
+      },
+      orderBy: {
+        createdAt: "desc"
+      }
+    });
+
+    let filteredRecords = records;
+    if (dateRange) {
+      const parseDate = (dStr: string) => {
+        const parsed = Date.parse(dStr);
+        return isNaN(parsed) ? new Date(dStr) : new Date(parsed);
+      };
+
+      if (dateRange.includes(" - ")) {
+        const [startStr, endStr] = dateRange.split(" - ");
+        const startDate = parseDate(startStr);
+        startDate.setHours(0, 0, 0, 0);
+        const endDate = parseDate(endStr);
+        endDate.setHours(23, 59, 59, 999);
+
+        filteredRecords = records.filter(r => {
+          const rDate = parseDate(r.date);
+          return rDate >= startDate && rDate <= endDate;
+        });
+      } else {
+        const targetDate = parseDate(dateRange);
+        targetDate.setHours(0, 0, 0, 0);
+        filteredRecords = records.filter(r => {
+          const rDate = parseDate(r.date);
+          rDate.setHours(0, 0, 0, 0);
+          return rDate.getTime() === targetDate.getTime();
+        });
+      }
+    }
+
+    return res.json({ attendanceRecords: filteredRecords });
+  } catch (error) {
+    console.error("GET attendance records error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /api/attendance/clock-in
+app.post("/api/attendance/clock-in", async (req, res) => {
+  try {
+    const { userId, clockInLoc, notes, device, ipAddress, companyId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: "User ID is required" });
+    }
+
+    const activeRecord = await db.attendanceRecord.findFirst({
+      where: {
+        userId,
+        clockOut: null,
+      }
+    });
+
+    if (activeRecord) {
+      return res.status(400).json({ error: "User is already clocked in" });
+    }
+
+    let targetCompanyId = companyId;
+    if (!targetCompanyId && userId) {
+      const userObj = await db.user.findUnique({ where: { id: userId } });
+      targetCompanyId = userObj?.companyId || "";
+    }
+
+    if (targetCompanyId) {
+      const settings = await db.attendanceSetting.findUnique({
+        where: { companyId: targetCompanyId }
+      });
+      if (settings && settings.officeGeofencing === "Active" && settings.officePolicy === "Not allow clock in/out outside the office") {
+        if ((clockInLoc || "Remote") === "Remote") {
+          return res.status(400).json({ error: "Clock in outside the office is not allowed by policy." });
+        }
+      }
+    }
+
+    const now = new Date();
+    const dateString = now.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    });
+
+    const timeString = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " (GMT+1)";
+
+    const newRecord = await db.attendanceRecord.create({
+      data: {
+        userId,
+        date: dateString,
+        clockIn: timeString,
+        clockInLoc: clockInLoc || "Remote",
+        schedule: "8h",
+        logged: "0h 00m 00s",
+        paid: "0h",
+        overtime: "0m",
+        status: "PENDING",
+        isPositive: false,
+        notes: notes || "",
+        device: device || "Web Browser",
+        ipAddress: ipAddress || "",
+        companyId: companyId || null,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          }
+        }
+      }
+    });
+
+    await createAndSendNotification(
+      userId,
+      "Clock In Successful",
+      `You successfully checked in at ${timeString}`,
+      "calendar",
+      "bg-teal-50 dark:bg-teal-500/10",
+      "text-[#0FAF7A]"
+    );
+
+    return res.status(201).json({ attendanceRecord: newRecord });
+  } catch (error) {
+    console.error("POST clock-in error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /api/attendance/clock-out/:id
+app.post("/api/attendance/clock-out/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { clockOutLoc, notes } = req.body;
+
+    const record = await db.attendanceRecord.findUnique({
+      where: { id }
+    });
+
+    if (!record) {
+      return res.status(404).json({ error: "Attendance record not found" });
+    }
+
+    if (record.clockOut) {
+      return res.status(400).json({ error: "User is already clocked out" });
+    }
+
+    let companyId = record.companyId;
+    if (!companyId) {
+      const userObj = await db.user.findUnique({
+        where: { id: record.userId }
+      });
+      companyId = userObj?.companyId || null;
+    }
+
+    let totalHoursCalculation = "Every Valid Check-in & Check-out";
+    if (companyId) {
+      const settings = await db.attendanceSetting.findUnique({
+        where: { companyId }
+      });
+      if (settings) {
+        totalHoursCalculation = settings.totalHoursCalculation;
+        if (settings.officeGeofencing === "Active" && settings.officePolicy === "Not allow clock in/out outside the office") {
+          const outLoc = clockOutLoc || record.clockInLoc;
+          if ((outLoc || "Remote") === "Remote") {
+            return res.status(400).json({ error: "Clock out outside the office is not allowed by policy." });
+          }
+        }
+      }
+    }
+
+    const now = new Date();
+    let diffSecs = 0;
+
+    if (totalHoursCalculation === "First Check-in & Last Check-out") {
+      const sameDayRecords = await db.attendanceRecord.findMany({
+        where: {
+          userId: record.userId,
+          date: record.date
+        },
+        orderBy: {
+          createdAt: 'asc'
+        }
+      });
+      const firstRecord = sameDayRecords[0] || record;
+      const clockInTime = new Date(firstRecord.createdAt);
+      const diffMs = now.getTime() - clockInTime.getTime();
+      diffSecs = Math.max(0, Math.floor(diffMs / 1000));
+    } else {
+      const clockInTime = new Date(record.createdAt);
+      const diffMs = now.getTime() - clockInTime.getTime();
+      diffSecs = Math.max(0, Math.floor(diffMs / 1000));
+    }
+
+    if (totalHoursCalculation === "Fixed Working Hours Only") {
+      diffSecs = Math.min(diffSecs, 28800); // Capped at 8 hours
+    }
+
+    const hrs = Math.floor(diffSecs / 3600);
+    const mins = Math.floor((diffSecs % 3600) / 60);
+    const secs = diffSecs % 60;
+    const loggedStr = `${hrs}h ${mins.toString().padStart(2, "0")}m ${secs.toString().padStart(2, "0")}s`;
+
+    let isPositive = false;
+    let overtimeStr = "0m";
+    let paidStr = "0h";
+
+    if (totalHoursCalculation === "Fixed Working Hours Only") {
+      isPositive = false;
+      overtimeStr = "0m";
+      paidStr = `${hrs}h`;
+    } else {
+      isPositive = diffSecs >= 28800;
+      const diffMins = Math.round((diffSecs - 28800) / 60);
+      overtimeStr = isPositive ? `+ ${diffMins}m` : `-${Math.abs(diffMins)}m`;
+      paidStr = diffSecs >= 28800 ? "8h" : `${hrs}h`;
+    }
+
+    const timeString = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " (GMT+1)";
+
+    const updatedRecord = await db.attendanceRecord.update({
+      where: { id },
+      data: {
+        clockOut: timeString,
+        clockOutLoc: clockOutLoc || record.clockInLoc,
+        logged: loggedStr,
+        paid: paidStr,
+        overtime: overtimeStr,
+        isPositive,
+        notes: notes || record.notes,
+        status: "PENDING",
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          }
+        }
+      }
+    });
+
+    await createAndSendNotification(
+      record.userId,
+      "Clock Out Successful",
+      `You successfully checked out at ${timeString}`,
+      "calendar",
+      "bg-teal-50 dark:bg-teal-500/10",
+      "text-[#0FAF7A]"
+    );
+
+    return res.json({ attendanceRecord: updatedRecord });
+  } catch (error) {
+    console.error("POST clock-out error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PUT /api/attendance/:id
+app.put("/api/attendance/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { paid, status, notes } = req.body;
+
+    const record = await db.attendanceRecord.findUnique({
+      where: { id }
+    });
+
+    if (!record) {
+      return res.status(404).json({ error: "Attendance record not found" });
+    }
+
+    const dataToUpdate: any = {};
+    if (paid !== undefined) {
+      dataToUpdate.paid = paid;
+    }
+    if (status !== undefined) {
+      dataToUpdate.status = status;
+    }
+    if (notes !== undefined) {
+      dataToUpdate.notes = notes;
+    }
+
+    const updatedRecord = await db.attendanceRecord.update({
+      where: { id },
+      data: dataToUpdate,
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          }
+        }
+      }
+    });
+
+    if (status !== undefined) {
+      await createAndSendNotification(
+        record.userId,
+        "Attendance Status Updated",
+        `Your attendance record for ${record.date} was marked as ${status.toLowerCase()}`,
+        "calendar",
+        "bg-teal-50 dark:bg-teal-500/10",
+        "text-[#0FAF7A]"
+      );
+    }
+
+    return res.json({ attendanceRecord: updatedRecord });
+  } catch (error) {
+    console.error("PUT attendance record error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/attendance/settings
+app.get("/api/attendance/settings", async (req, res) => {
+  try {
+    const companyId = req.query.companyId as string;
+
+    if (!companyId) {
+      return res.status(400).json({ error: "Company ID is required" });
+    }
+
+    let settings = await db.attendanceSetting.findUnique({
+      where: { companyId }
+    });
+
+    if (!settings) {
+      settings = await db.attendanceSetting.create({
+        data: {
+          companyId,
+        }
+      });
+    }
+
+    return res.json({ attendanceSetting: settings });
+  } catch (error) {
+    console.error("GET attendance settings error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PUT /api/attendance/settings
+app.put("/api/attendance/settings", async (req, res) => {
+  try {
+    const { companyId, ...fields } = req.body;
+
+    if (!companyId) {
+      return res.status(400).json({ error: "Company ID is required" });
+    }
+
+    const settings = await db.attendanceSetting.upsert({
+      where: { companyId },
+      update: fields,
+      create: {
+        companyId,
+        ...fields
+      }
+    });
+
+    return res.json({ attendanceSetting: settings });
+  } catch (error) {
+    console.error("PUT attendance settings error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
+// ─── Payroll Routes ──────────────────────────────────────────────────
+
+// GET /api/payroll
+app.get("/api/payroll", async (req, res) => {
+  try {
+    const { companyId, search, department, status } = req.query;
+
+    let targetCompanyId = companyId as string;
+    if (!targetCompanyId) {
+      const firstCompany = await db.company.findFirst();
+      if (firstCompany) {
+        targetCompanyId = firstCompany.id;
+      } else {
+        const defaultCompany = await db.company.create({
+          data: { name: "Default Company" }
+        });
+        targetCompanyId = defaultCompany.id;
+      }
+    }
+
+
+
+    const where: any = { companyId: targetCompanyId };
+
+    if (status && status !== "All Status") {
+      where.status = (status as string).toUpperCase();
+    }
+
+    const records = await db.payrollRecord.findMany({
+      where,
+      include: {
+        user: true
+      },
+      orderBy: {
+        createdAt: "desc"
+      }
+    });
+
+    let payrolls = await Promise.all(records.map(async (rec) => {
+      const employee = await db.employee.findUnique({
+        where: { email: rec.user.email }
+      });
+      return {
+        id: rec.id,
+        userId: rec.userId,
+        name: rec.user.name,
+        email: rec.user.email,
+        fallback: rec.user.name.split(" ").map(n => n[0]).join("").toUpperCase(),
+        department: employee?.department || "Design",
+        jobTitle: employee?.role || rec.title,
+        baseSalary: `$${rec.baseSalary.toLocaleString()}`,
+        bonus: `$${rec.bonus.toLocaleString()}`,
+        deductions: `$${rec.deductions.toLocaleString()}`,
+        netPay: `$${rec.netPay.toLocaleString()}`,
+        period: rec.period,
+        status: rec.status,
+        employmentType: rec.employmentType,
+        geofencing: rec.geofencing,
+        jobDate: rec.jobDate,
+        lastWorkingDate: rec.lastWorkingDate,
+        bankInfo: {
+          bankName: rec.bankName,
+          accountName: rec.accountName,
+          branch: rec.branch,
+          accountNumber: rec.accountNumber,
+          swiftBic: rec.swiftBic,
+          iban: rec.iban
+        }
+      };
+    }));
+
+    if (search) {
+      const query = (search as string).toLowerCase();
+      payrolls = payrolls.filter(p => p.name.toLowerCase().includes(query) || p.email.toLowerCase().includes(query));
+    }
+
+    if (department && department !== "All Departments") {
+      payrolls = payrolls.filter(p => p.department.toLowerCase() === (department as string).toLowerCase());
+    }
+
+    return res.json({ payrollRecords: payrolls });
+  } catch (error) {
+    console.error("GET payroll records error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/payroll/:id
+app.get("/api/payroll/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rec = await db.payrollRecord.findUnique({
+      where: { id },
+      include: { user: true }
+    });
+
+    if (!rec) {
+      return res.status(404).json({ error: "Payroll record not found" });
+    }
+
+    const employee = await db.employee.findUnique({
+      where: { email: rec.user.email }
+    });
+
+    return res.json({
+      payrollRecord: {
+        id: rec.id,
+        userId: rec.userId,
+        name: rec.user.name,
+        email: rec.user.email,
+        fallback: rec.user.name.split(" ").map(n => n[0]).join("").toUpperCase(),
+        department: employee?.department || "Design",
+        jobTitle: employee?.role || rec.title,
+        baseSalary: `$${rec.baseSalary.toLocaleString()}`,
+        bonus: `$${rec.bonus.toLocaleString()}`,
+        deductions: `$${rec.deductions.toLocaleString()}`,
+        netPay: `$${rec.netPay.toLocaleString()}`,
+        period: rec.period,
+        status: rec.status,
+        employmentType: rec.employmentType,
+        geofencing: rec.geofencing,
+        jobDate: rec.jobDate,
+        lastWorkingDate: rec.lastWorkingDate,
+        bankInfo: {
+          bankName: rec.bankName,
+          accountName: rec.accountName,
+          branch: rec.branch,
+          accountNumber: rec.accountNumber,
+          swiftBic: rec.swiftBic,
+          iban: rec.iban
+        }
+      }
+    });
+  } catch (error) {
+    console.error("GET payroll record detail error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PUT /api/payroll/:id
+app.put("/api/payroll/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { baseSalary, bonus, deductions, status, employmentType, geofencing, title, jobDate, lastWorkingDate, bankName, accountName, branch, accountNumber, swiftBic, iban } = req.body;
+
+    const record = await db.payrollRecord.findUnique({ where: { id } });
+    if (!record) {
+      return res.status(404).json({ error: "Payroll record not found" });
+    }
+
+    const dataToUpdate: any = {};
+    if (baseSalary !== undefined) dataToUpdate.baseSalary = parseFloat(baseSalary.toString().replace(/[$,]/g, "")) || 0;
+    if (bonus !== undefined) dataToUpdate.bonus = parseFloat(bonus.toString().replace(/[$,]/g, "")) || 0;
+    if (deductions !== undefined) dataToUpdate.deductions = parseFloat(deductions.toString().replace(/[$,]/g, "")) || 0;
+    
+    // Automatically recalculate netPay if baseSalary, bonus, or deductions are updated
+    const finalSalary = baseSalary !== undefined ? dataToUpdate.baseSalary : record.baseSalary;
+    const finalBonus = bonus !== undefined ? dataToUpdate.bonus : record.bonus;
+    const finalDeductions = deductions !== undefined ? dataToUpdate.deductions : record.deductions;
+    dataToUpdate.netPay = finalSalary + finalBonus - finalDeductions;
+
+    if (status !== undefined) dataToUpdate.status = status;
+    if (employmentType !== undefined) dataToUpdate.employmentType = employmentType;
+    if (geofencing !== undefined) dataToUpdate.geofencing = geofencing;
+    if (title !== undefined) dataToUpdate.title = title;
+    if (jobDate !== undefined) dataToUpdate.jobDate = jobDate;
+    if (lastWorkingDate !== undefined) dataToUpdate.lastWorkingDate = lastWorkingDate;
+    if (bankName !== undefined) dataToUpdate.bankName = bankName;
+    if (accountName !== undefined) dataToUpdate.accountName = accountName;
+    if (branch !== undefined) dataToUpdate.branch = branch;
+    if (accountNumber !== undefined) dataToUpdate.accountNumber = accountNumber;
+    if (swiftBic !== undefined) dataToUpdate.swiftBic = swiftBic;
+    if (iban !== undefined) dataToUpdate.iban = iban;
+
+    const updated = await db.payrollRecord.update({
+      where: { id },
+      data: dataToUpdate,
+      include: { user: true }
+    });
+
+    if (status !== undefined) {
+      await createAndSendNotification(
+        updated.userId,
+        "Payroll Status Updated",
+        `Your payroll for period ${updated.period} has been marked as ${status.toLowerCase()}`,
+        "currency",
+        "bg-emerald-50 dark:bg-emerald-500/10",
+        "text-emerald-500"
+      );
+    }
+
+    const employee = await db.employee.findUnique({
+      where: { email: updated.user.email }
+    });
+
+    return res.json({
+      payrollRecord: {
+        id: updated.id,
+        userId: updated.userId,
+        name: updated.user.name,
+        email: updated.user.email,
+        fallback: updated.user.name.split(" ").map(n => n[0]).join("").toUpperCase(),
+        department: employee?.department || "Design",
+        jobTitle: employee?.role || updated.title,
+        baseSalary: `$${updated.baseSalary.toLocaleString()}`,
+        bonus: `$${updated.bonus.toLocaleString()}`,
+        deductions: `$${updated.deductions.toLocaleString()}`,
+        netPay: `$${updated.netPay.toLocaleString()}`,
+        period: updated.period,
+        status: updated.status,
+        employmentType: updated.employmentType,
+        geofencing: updated.geofencing,
+        jobDate: updated.jobDate,
+        lastWorkingDate: updated.lastWorkingDate,
+        bankInfo: {
+          bankName: updated.bankName,
+          accountName: updated.accountName,
+          branch: updated.branch,
+          accountNumber: updated.accountNumber,
+          swiftBic: updated.swiftBic,
+          iban: updated.iban
+        }
+      }
+    });
+  } catch (error) {
+    console.error("PUT payroll record error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /api/payroll/:id
+app.delete("/api/payroll/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.payrollRecord.delete({ where: { id } });
+    return res.json({ success: true, message: "Payroll record deleted successfully" });
+  } catch (error) {
+    console.error("DELETE payroll record error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/payroll/settings
+app.get("/api/payroll/settings", async (req, res) => {
+  try {
+    const companyId = req.query.companyId as string;
+    if (!companyId) {
+      return res.status(400).json({ error: "Company ID is required" });
+    }
+
+    let settings = await db.payrollSetting.findUnique({
+      where: { companyId }
+    });
+
+    if (!settings) {
+      settings = await db.payrollSetting.create({
+        data: {
+          companyId
+        }
+      });
+    }
+
+    return res.json({ payrollSetting: settings });
+  } catch (error) {
+    console.error("GET payroll settings error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PUT /api/payroll/settings
+app.put("/api/payroll/settings", async (req, res) => {
+  try {
+    const { companyId, ...fields } = req.body;
+    if (!companyId) {
+      return res.status(400).json({ error: "Company ID is required" });
+    }
+
+    const settings = await db.payrollSetting.upsert({
+      where: { companyId },
+      update: fields,
+      create: {
+        companyId,
+        ...fields
+      }
+    });
+
+    return res.json({ payrollSetting: settings });
+  } catch (error) {
+    console.error("PUT payroll settings error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ─── Recruitment Routes ──────────────────────────────────────────────
+
+// Helper to get default company ID
+async function getRecruitmentCompanyId(companyId?: string) {
+  if (companyId) return companyId;
+  const firstCompany = await db.company.findFirst();
+  if (firstCompany) return firstCompany.id;
+  const defaultCompany = await db.company.create({
+    data: { name: "Default Company" }
+  });
+  return defaultCompany.id;
+}
+
+// GET /api/recruitment/jobs
+app.get("/api/recruitment/jobs", async (req, res) => {
+  try {
+    const { companyId: qCompanyId, search } = req.query;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+
+
+    const where: any = { companyId };
+    if (search) {
+      where.title = { contains: search as string, mode: "insensitive" };
+    }
+
+    const dbJobs = await db.job.findMany({
+      where,
+      include: {
+        candidates: true
+      },
+      orderBy: { createdAt: "desc" }
+    });
+
+    const jobs = dbJobs.map((j) => {
+      // Find candidate avatars from first 3 applied candidates
+      const avatars = j.candidates.slice(0, 3).map((c) => c.avatar || "https://i.pravatar.cc/150");
+      return {
+        id: j.id,
+        title: j.title,
+        department: j.department,
+        office: j.office,
+        candidatesApplied: j.candidates.length,
+        avatars,
+        status: j.status,
+        employmentType: j.employmentType,
+        quantity: j.quantity,
+        closingDate: j.closingDate,
+        description: j.description,
+        invitedMembers: j.invitedMembers,
+        workflowStages: j.workflowStages,
+        createdAt: "Just now" // Keep it standard for front-end rendering
+      };
+    });
+
+    return res.json({ jobs });
+  } catch (error) {
+    console.error("GET jobs error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/recruitment/jobs/:id
+app.get("/api/recruitment/jobs/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const j = await db.job.findUnique({
+      where: { id },
+      include: {
+        candidates: true
+      }
+    });
+
+    if (!j) {
+      return res.status(404).json({ error: "Job not found" });
+    }
+
+    const job = {
+      id: j.id,
+      title: j.title,
+      department: j.department,
+      office: j.office,
+      status: j.status,
+      employmentType: j.employmentType,
+      quantity: j.quantity,
+      closingDate: j.closingDate,
+      description: j.description,
+      invitedMembers: j.invitedMembers,
+      workflowStages: j.workflowStages,
+      candidates: j.candidates.map((c) => ({
+        id: c.id,
+        name: c.name,
+        email: c.email,
+        avatar: c.avatar,
+        fallback: c.name.split(" ").map((n) => n[0]).join("").toUpperCase(),
+        phone: c.phone,
+        cv: c.cv,
+        createdDate: c.cv ? "CV.pdf" : null, // Front-end expects cv string or null
+        stage: c.stage,
+        overallRating: c.overallRating,
+        evaluationText: c.evaluationText,
+        comments: c.comments,
+        activity: c.activity
+      }))
+    };
+
+    return res.json({ job });
+  } catch (error) {
+    console.error("GET job details error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /api/recruitment/jobs
+app.post("/api/recruitment/jobs", async (req, res) => {
+  try {
+    const { title, department, office, employmentType, quantity, closingDate, description, invitedMembers, workflowStages, companyId: qCompanyId } = req.body;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+    const newJob = await db.job.create({
+      data: {
+        title,
+        department,
+        office,
+        employmentType: employmentType || "Fulltime",
+        quantity: quantity ? parseInt(quantity.toString()) : 1,
+        closingDate: closingDate || "N/A",
+        description: description || "",
+        invitedMembers: invitedMembers || [],
+        workflowStages: workflowStages || [
+          { name: "Applied", isLocked: true },
+          { name: "Screening", isLocked: false },
+          { name: "1st Interview", isLocked: false },
+          { name: "2nd Interview", isLocked: false },
+          { name: "Offered", isLocked: true },
+          { name: "Hired", isLocked: true },
+          { name: "Rejected", isLocked: true }
+        ],
+        companyId
+      }
+    });
+
+    return res.json({ job: newJob });
+  } catch (error) {
+    console.error("POST job error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PUT /api/recruitment/jobs/:id
+app.put("/api/recruitment/jobs/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, department, office, employmentType, quantity, closingDate, description, invitedMembers, workflowStages, status } = req.body;
+
+    const updatedJob = await db.job.update({
+      where: { id },
+      data: {
+        title,
+        department,
+        office,
+        employmentType,
+        quantity: quantity ? parseInt(quantity.toString()) : undefined,
+        closingDate,
+        description,
+        invitedMembers,
+        workflowStages,
+        status
+      }
+    });
+
+    return res.json({ job: updatedJob });
+  } catch (error) {
+    console.error("PUT job error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /api/recruitment/jobs/:id
+app.delete("/api/recruitment/jobs/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Delete candidates first to prevent FK violation
+    await db.candidate.deleteMany({ where: { jobId: id } });
+    await db.job.delete({ where: { id } });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE job error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// GET /api/recruitment/candidates
+app.get("/api/recruitment/candidates", async (req, res) => {
+  try {
+    const { companyId: qCompanyId, search, status } = req.query;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+
+
+    const where: any = { companyId };
+    if (search) {
+      where.OR = [
+        { name: { contains: search as string, mode: "insensitive" } },
+        { email: { contains: search as string, mode: "insensitive" } },
+        { phone: { contains: search as string, mode: "insensitive" } },
+        { jobTitle: { contains: search as string, mode: "insensitive" } }
+      ];
+    }
+
+    if (status && status !== "All Status") {
+      where.stage = status as string;
+    }
+
+    const dbCandidates = await db.candidate.findMany({
+      where,
+      include: {
+        job: true
+      },
+      orderBy: { createdAt: "desc" }
+    });
+
+    const candidates = dbCandidates.map((c) => ({
+      id: c.id,
+      name: c.name,
+      email: c.email,
+      avatar: c.avatar,
+      phone: c.phone,
+      jobId: c.jobId,
+      job: c.job ? c.job.title : c.jobTitle,
+      cv: c.cv,
+      createdDate: c.createdAt.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+      stage: c.stage,
+      overallRating: c.overallRating,
+      evaluationText: c.evaluationText,
+      comments: c.comments,
+      activity: c.activity
+    }));
+
+    return res.json({ candidates });
+  } catch (error) {
+    console.error("GET candidates error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /api/recruitment/candidates
+app.post("/api/recruitment/candidates", async (req, res) => {
+  try {
+    const { name, email, phone, job, cv, stage, companyId: qCompanyId } = req.body;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+    // Try to match job title
+    const matchedJob = await db.job.findFirst({
+      where: {
+        companyId,
+        title: { equals: job, mode: "insensitive" }
+      }
+    });
+
+    const newCandidate = await db.candidate.create({
+      data: {
+        name,
+        email,
+        phone: phone || "",
+        avatar: `https://i.pravatar.cc/150?u=${encodeURIComponent(name)}`,
+        jobTitle: job || "General",
+        jobId: matchedJob ? matchedJob.id : null,
+        cv: cv || "-",
+        stage: stage || "Applied",
+        companyId
+      }
+    });
+
+    return res.json({ candidate: newCandidate });
+  } catch (error) {
+    console.error("POST candidate error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PUT /api/recruitment/candidates/:id
+app.put("/api/recruitment/candidates/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, phone, jobTitle, cv, stage, overallRating, evaluationText, comments, activity } = req.body;
+
+    const candidateBefore = await db.candidate.findUnique({ where: { id } });
+    if (!candidateBefore) {
+      return res.status(404).json({ error: "Candidate not found" });
+    }
+
+    const updatedCandidate = await db.candidate.update({
+      where: { id },
+      data: {
+        name,
+        email,
+        phone,
+        jobTitle,
+        cv,
+        stage,
+        overallRating,
+        evaluationText,
+        comments,
+        activity
+      }
+    });
+
+    if (stage !== undefined && candidateBefore.stage !== stage) {
+      const managers = await db.user.findMany({
+        where: {
+          companyId: candidateBefore.companyId,
+          role: { in: ["ADMIN", "MANAGER"] }
+        }
+      });
+      for (const manager of managers) {
+        await createAndSendNotification(
+          manager.id,
+          "Candidate Stage Moved",
+          `Candidate ${updatedCandidate.name} was moved to "${stage}" for "${updatedCandidate.jobTitle || 'Job'}"`,
+          "briefcase",
+          "bg-indigo-50 dark:bg-indigo-500/10",
+          "text-indigo-600"
+        );
+      }
+    }
+
+    return res.json({ candidate: updatedCandidate });
+  } catch (error) {
+    console.error("PUT candidate error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /api/recruitment/candidates/:id
+app.delete("/api/recruitment/candidates/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.candidate.delete({ where: { id } });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE candidate error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Settings: Stages
+app.get("/api/recruitment/settings/stages", async (req, res) => {
+  try {
+    const { companyId: qCompanyId } = req.query;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+    // Seed defaults if empty
+    const count = await db.recruitmentStage.count({ where: { companyId } });
+    if (count === 0) {
+      const defaultStages = [
+        { name: "Applied", isLocked: true, position: 0 },
+        { name: "Screening", isLocked: false, position: 1 },
+        { name: "1st Interview", isLocked: false, position: 2 },
+        { name: "2nd Interview", isLocked: false, position: 3 },
+        { name: "Offered", isLocked: true, position: 4 },
+        { name: "Hired", isLocked: true, position: 5 },
+        { name: "Rejected", isLocked: true, position: 6 }
+      ];
+
+      for (const ds of defaultStages) {
+        await db.recruitmentStage.create({
+          data: { ...ds, companyId }
+        });
+      }
+    }
+
+    const stages = await db.recruitmentStage.findMany({
+      where: { companyId },
+      orderBy: { position: "asc" }
+    });
+
+    return res.json({ stages });
+  } catch (error) {
+    console.error("GET stages error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/api/recruitment/settings/stages", async (req, res) => {
+  try {
+    const { name, companyId: qCompanyId } = req.body;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+    const maxPosStage = await db.recruitmentStage.findFirst({
+      where: { companyId },
+      orderBy: { position: "desc" }
+    });
+
+    const nextPos = maxPosStage ? maxPosStage.position + 1 : 0;
+
+    const newStage = await db.recruitmentStage.create({
+      data: {
+        name,
+        isLocked: false,
+        position: nextPos,
+        companyId
+      }
+    });
+
+    return res.json({ stage: newStage });
+  } catch (error) {
+    console.error("POST stage error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.put("/api/recruitment/settings/stages/reorder", async (req, res) => {
+  try {
+    const { stageIds } = req.body; // Array of IDs in new order
+    if (!Array.isArray(stageIds)) {
+      return res.status(400).json({ error: "stageIds must be an array" });
+    }
+
+    await Promise.all(
+      stageIds.map((id, index) =>
+        db.recruitmentStage.update({
+          where: { id },
+          data: { position: index }
+        })
+      )
+    );
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("Reorder stages error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.put("/api/recruitment/settings/stages/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    const updated = await db.recruitmentStage.update({
+      where: { id },
+      data: { name }
+    });
+
+    return res.json({ stage: updated });
+  } catch (error) {
+    console.error("PUT stage error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/api/recruitment/settings/stages/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.recruitmentStage.delete({ where: { id } });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE stage error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Settings: Tags
+app.get("/api/recruitment/settings/tags", async (req, res) => {
+  try {
+    const { companyId: qCompanyId } = req.query;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+    // Seed defaults if empty
+    const count = await db.recruitmentTag.count({ where: { companyId } });
+    if (count === 0) {
+      const defaultTags = ["Design", "Engineer", "Finance", "Product"];
+      for (const t of defaultTags) {
+        await db.recruitmentTag.create({
+          data: { name: t, companyId }
+        });
+      }
+    }
+
+    const dbTags = await db.recruitmentTag.findMany({
+      where: { companyId },
+      orderBy: { createdAt: "asc" }
+    });
+
+    const tags = await Promise.all(
+      dbTags.map(async (t) => {
+        // Count candidates matching this tag (jobTitle or job department)
+        const candidateCount = await db.candidate.count({
+          where: {
+            companyId,
+            OR: [
+              { jobTitle: { contains: t.name, mode: "insensitive" } },
+              { job: { department: { contains: t.name, mode: "insensitive" } } }
+            ]
+          }
+        });
+        return {
+          id: t.id,
+          name: t.name,
+          candidateCount
+        };
+      })
+    );
+
+    return res.json({ tags });
+  } catch (error) {
+    console.error("GET tags error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/api/recruitment/settings/tags", async (req, res) => {
+  try {
+    const { name, companyId: qCompanyId } = req.body;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+    const newTag = await db.recruitmentTag.create({
+      data: { name, companyId }
+    });
+
+    return res.json({ tag: newTag });
+  } catch (error) {
+    console.error("POST tag error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.put("/api/recruitment/settings/tags/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    const updated = await db.recruitmentTag.update({
+      where: { id },
+      data: { name }
+    });
+
+    return res.json({ tag: updated });
+  } catch (error) {
+    console.error("PUT tag error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/api/recruitment/settings/tags/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.recruitmentTag.delete({ where: { id } });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE tag error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Settings: Resources
+app.get("/api/recruitment/settings/resources", async (req, res) => {
+  try {
+    const { companyId: qCompanyId } = req.query;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+    const count = await db.recruitmentResource.count({ where: { companyId } });
+    if (count === 0) {
+      const defaultResources = ["Interview Evaluation Sheet", "Candidate Assessment Checklist"];
+      for (const r of defaultResources) {
+        await db.recruitmentResource.create({
+          data: { name: r, companyId }
+        });
+      }
+    }
+
+    const dbResources = await db.recruitmentResource.findMany({
+      where: { companyId },
+      orderBy: { updatedAt: "desc" }
+    });
+
+    const resources = dbResources.map((r) => {
+      // Find time elapsed
+      const diffMs = Date.now() - r.updatedAt.getTime();
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      let updatedAtStr = "Updated just now";
+      if (diffDays > 0) {
+        updatedAtStr = `Updated ${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
+      }
+
+      return {
+        id: r.id,
+        name: r.name,
+        updatedAt: updatedAtStr
+      };
+    });
+
+    return res.json({ resources });
+  } catch (error) {
+    console.error("GET resources error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/api/recruitment/settings/resources", async (req, res) => {
+  try {
+    const { name, companyId: qCompanyId } = req.body;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+    const newResource = await db.recruitmentResource.create({
+      data: { name, companyId }
+    });
+
+    return res.json({ resource: newResource });
+  } catch (error) {
+    console.error("POST resource error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.put("/api/recruitment/settings/resources/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    const updated = await db.recruitmentResource.update({
+      where: { id },
+      data: { name }
+    });
+
+    return res.json({ resource: updated });
+  } catch (error) {
+    console.error("PUT resource error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/api/recruitment/settings/resources/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.recruitmentResource.delete({ where: { id } });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE resource error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Settings: Email Templates
+app.get("/api/recruitment/settings/templates", async (req, res) => {
+  try {
+    const { companyId: qCompanyId } = req.query;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+
+
+    const dbTemplates = await db.recruitmentEmailTemplate.findMany({
+      where: { companyId },
+      orderBy: { createdAt: "asc" }
+    });
+
+    const templates = dbTemplates.map((t) => ({
+      id: t.id,
+      name: t.name,
+      subject: t.subject,
+      body: t.body,
+      stage: t.stage,
+      lastModified: t.updatedAt.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
+      isLocked: t.isLocked
+    }));
+
+    return res.json({ templates });
+  } catch (error) {
+    console.error("GET templates error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/api/recruitment/settings/templates", async (req, res) => {
+  try {
+    const { name, subject, body, stage, companyId: qCompanyId } = req.body;
+    const companyId = await getRecruitmentCompanyId(qCompanyId as string);
+
+    const newTemplate = await db.recruitmentEmailTemplate.create({
+      data: {
+        name,
+        subject,
+        body,
+        stage,
+        isLocked: false,
+        companyId
+      }
+    });
+
+    return res.json({ template: newTemplate });
+  } catch (error) {
+    console.error("POST template error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.put("/api/recruitment/settings/templates/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, subject, body, stage } = req.body;
+
+    const updated = await db.recruitmentEmailTemplate.update({
+      where: { id },
+      data: { name, subject, body, stage }
+    });
+
+    return res.json({ template: updated });
+  } catch (error) {
+    console.error("PUT template error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /api/recruitment/settings/templates/:id
+app.delete("/api/recruitment/settings/templates/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.recruitmentEmailTemplate.delete({ where: { id } });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE template error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Notifications Routes
+app.get("/api/notifications", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    const notifications = await db.notification.findMany({
+      where: { userId: userId as string },
+      orderBy: { createdAt: "desc" },
+    });
+    return res.json({ notifications });
+  } catch (error) {
+    console.error("GET notifications error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.put("/api/notifications/:id/read", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const notification = await db.notification.update({
+      where: { id },
+      data: { unread: false },
+    });
+    return res.json({ success: true, notification });
+  } catch (error) {
+    console.error("PUT notification read error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.put("/api/notifications/read-all", async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    await db.notification.updateMany({
+      where: { userId, unread: true },
+      data: { unread: false },
+    });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("PUT notification read-all error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/api/notifications/clear-all", async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    await db.notification.deleteMany({
+      where: { userId },
+    });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE notifications clear-all error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/api/notifications/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.notification.delete({
+      where: { id },
+    });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE notification error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Performance Evaluation Routes
+
+// GET /api/performance (list evaluations)
+app.get("/api/performance", async (req, res) => {
+  try {
+    const companyId = req.query.companyId as string;
+    const employeeId = req.query.employeeId as string;
+    const employeeEmail = req.query.employeeEmail as string;
+
+    const where: any = {};
+    if (companyId) where.companyId = companyId;
+    if (employeeId) where.employeeId = employeeId;
+    if (employeeEmail) where.employeeEmail = employeeEmail;
+
+    const evaluations = await db.performanceEvaluation.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+    });
+
+    return res.json({ evaluations });
+  } catch (error) {
+    console.error("GET performance evaluations error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /api/performance (create evaluation)
+app.post("/api/performance", async (req, res) => {
+  try {
+    const {
+      employeeId,
+      employeeName,
+      employeeEmail,
+      reviewerName,
+      reviewPeriod,
+      workQuality,
+      communication,
+      teamwork,
+      punctuality,
+      strengths,
+      growth,
+      status,
+      companyId,
+    } = req.body;
+
+    if (!employeeId || !employeeName || !employeeEmail || !reviewerName || !reviewPeriod) {
+      return res.status(400).json({ error: "Required fields are missing." });
+    }
+
+    const evaluation = await db.performanceEvaluation.create({
+      data: {
+        employeeId,
+        employeeName,
+        employeeEmail,
+        reviewerName,
+        reviewPeriod,
+        workQuality: Number(workQuality) || 5,
+        communication: Number(communication) || 5,
+        teamwork: Number(teamwork) || 5,
+        punctuality: Number(punctuality) || 5,
+        strengths: strengths || "",
+        growth: growth || "",
+        status: status || "SUBMITTED",
+        companyId,
+      },
+    });
+
+    return res.status(201).json({ evaluation });
+  } catch (error) {
+    console.error("POST performance evaluation error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// PUT /api/performance/:id (update evaluation)
+app.put("/api/performance/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      reviewerName,
+      reviewPeriod,
+      workQuality,
+      communication,
+      teamwork,
+      punctuality,
+      strengths,
+      growth,
+      status,
+    } = req.body;
+
+    const updateData: any = {};
+    if (reviewerName !== undefined) updateData.reviewerName = reviewerName;
+    if (reviewPeriod !== undefined) updateData.reviewPeriod = reviewPeriod;
+    if (workQuality !== undefined) updateData.workQuality = Number(workQuality) || 5;
+    if (communication !== undefined) updateData.communication = Number(communication) || 5;
+    if (teamwork !== undefined) updateData.teamwork = Number(teamwork) || 5;
+    if (punctuality !== undefined) updateData.punctuality = Number(punctuality) || 5;
+    if (strengths !== undefined) updateData.strengths = strengths;
+    if (growth !== undefined) updateData.growth = growth;
+    if (status !== undefined) updateData.status = status;
+
+    const evaluation = await db.performanceEvaluation.update({
+      where: { id },
+      data: updateData,
+    });
+
+    return res.json({ evaluation });
+  } catch (error) {
+    console.error("PUT performance evaluation error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /api/performance/:id (delete evaluation)
+app.delete("/api/performance/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.performanceEvaluation.delete({
+      where: { id },
+    });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE performance evaluation error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Health check endpoint
+
 
 app.get("/health", (req, res) => {
   res.json({ status: "OK" });
