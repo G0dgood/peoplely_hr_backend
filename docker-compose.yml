@@ -9,7 +9,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: peoplely_hr_backend
+      POSTGRES_DB: hrms_3.0_api
     volumes:
       - postgres_backend_data:/var/lib/postgresql/data
     restart: always
